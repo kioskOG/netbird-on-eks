@@ -1,0 +1,142 @@
+# helm upgrade --install netbird . \
+#   --namespace netbird \
+#   --create-namespace \
+#   -f values.yaml -f values.local.yaml \
+#   --wait
+
+global:
+  domain: "netbird.REPLACE_ME_DOMAIN"
+  protocol: "https"
+  publicPort: 443
+
+server:
+  image:
+    repository: netbirdio/netbird-server
+    tag: "0.80.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  securityContext:
+    runAsNonRoot: false
+    runAsUser: 0
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop:
+        - ALL
+  podSecurityContext:
+    fsGroup: 1000
+  port: 80
+  stunPort: 3478
+  metricsPort: 9090
+  healthPort: 9000
+
+dashboard:
+  image:
+    repository: netbirdio/dashboard
+    tag: "v2.94.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  securityContext:
+    runAsNonRoot: false
+    runAsUser: 0
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false # Nginx writes to temp folders
+  podSecurityContext:
+    fsGroup: 101
+  port: 80
+
+database:
+  secretName: "netbird-pg-app"
+  name: "netbird"
+
+secrets:
+  create: true
+  awsSecretName: "dev/netbird/keys"
+  refreshInterval: "1h"
+  clusterSecretStoreName: "aws-secretsmanager"
+
+oidc:
+  # Empty uses the embedded IdP at https://<domain>/oauth2. Set this only to override that issuer.
+  authority: ""
+  clientId: "netbird-dashboard"
+  audience: "netbird-dashboard"
+  supportedScopes: "openid profile email groups"
+
+# External login provider. The dashboard still uses the embedded issuer above.
+# type: oidc, google, microsoft, entra, okta, zitadel, pocketid, authentik, keycloak, adfs
+# google and microsoft do not use issuer. Every other type requires it.
+# client secret and the admin token live in secrets.awsSecretName (idp-client-secret, idp-admin-token).
+idp:
+  enabled: true
+  type: keycloak
+  name: Keycloak
+  clientId: netbird
+  issuer: "https://keycloak.REPLACE_ME_DOMAIN/realms/netbird"
+
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: gp2
+
+ingress:
+  enabled: true
+  className: "alb"
+  certificateArn: "arn:aws:acm:REPLACE_ME_AWS_REGION:REPLACE_ME_AWS_ACCOUNT_ID:certificate/REPLACE_ME_ACM_CERTIFICATE_ID"
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    # alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:REGION:ACCOUNT_ID:certificate/CERT_ID" # Uncomment and set if ACM cert is not auto-discovered
+    # ALPN Policy for gRPC and HTTP/2
+  # HTTP2, not GRPC: controller v2.6 treated GRPC success-codes as gRPC
+  # status codes (0-99). /metrics returns HTTP 200, so GRPC blocks ALB create.
+  # gRPC still rides HTTP/2 on this target group.
+  grpcAnnotations:
+    alb.ingress.kubernetes.io/backend-protocol-version: HTTP2
+
+# Gateway API alternative to the Ingress above (templates/gateway.yaml).
+# Same routing and target groups, built from Gateway/HTTPRoute plus the AWS LBC
+# LoadBalancerConfiguration and TargetGroupConfiguration CRDs.
+# Needs AWS Load Balancer Controller v2.14+ and the Gateway API CRDs. The
+# aws-alb-controller chart (3.6.0) installs both.
+# Both can be enabled at once during a cutover: each creates its own ALB, and
+# DNS decides which one serves traffic. Disable the Ingress afterwards.
+gateway:
+  enabled: false
+  gatewayClass:
+    # GatewayClass is cluster-scoped. Set create: false if one with
+    # controllerName gateway.k8s.aws/alb already exists, and put its name here.
+    create: true
+    name: "netbird-alb"
+  # gateway.k8s.aws/v1beta1 on controllers older than v3.x
+  awsApiVersion: "gateway.k8s.aws/v1"
+  scheme: internet-facing
+  certificateArn: "arn:aws:acm:REPLACE_ME_AWS_REGION:REPLACE_ME_AWS_ACCOUNT_ID:certificate/REPLACE_ME_ACM_CERTIFICATE_ID"
+  sslPolicy: ""
+  loadBalancerName: ""
+  tags: {}
+
+pdb:
+  enabled: false
+
+serviceAccount:
+  create: true
+  name: ""
+
+networkPolicy:
+  enabled: false

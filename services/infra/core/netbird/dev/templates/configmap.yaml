@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "netbird.fullname" . }}-config
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+data:
+  config.yaml.tmpl: |
+    server:
+      listenAddress: ":{{ .Values.server.port }}"
+      exposedAddress: "{{ .Values.global.protocol }}://{{ .Values.global.domain }}:{{ .Values.global.publicPort }}"
+      stunPorts:
+        - {{ .Values.server.stunPort }}
+      metricsPort: {{ .Values.server.metricsPort }}
+      healthcheckAddress: ":{{ .Values.server.healthPort }}"
+      logLevel: "info"
+      logFile: "console"
+      dataDir: "/var/lib/netbird"
+      authSecret: "${NETBIRD_AUTH_SECRET}"
+      auth:
+        issuer: "{{ .Values.oidc.authority | default (printf "%s://%s/oauth2" .Values.global.protocol .Values.global.domain) }}"
+        localAuthDisabled: false
+        signKeyRefreshEnabled: true
+        sessionCookieEncryptionKey: "${NETBIRD_SESSION_COOKIE_ENCRYPTION_KEY}"
+        dashboardRedirectURIs:
+          - "{{ .Values.global.protocol }}://{{ .Values.global.domain }}/nb-auth"
+          - "{{ .Values.global.protocol }}://{{ .Values.global.domain }}/nb-silent-auth"
+        cliRedirectURIs:
+          - "http://localhost:53000/"
+      reverseProxy:
+        trustedHTTPProxies: []
+      store:
+        engine: "postgres"
+        encryptionKey: "${NETBIRD_DATASTORE_ENCRYPTION_KEY}"
+        dsn: "host=${PG_HOST} port=${PG_PORT} user=${PG_USER} password=${PG_PASSWORD} dbname=${PG_DB_NAME} sslmode=disable"

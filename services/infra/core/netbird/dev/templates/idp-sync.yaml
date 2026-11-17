@@ -1,0 +1,182 @@
+{{- if .Values.idp.enabled }}
+{{- $allowed := list "oidc" "google" "microsoft" "entra" "okta" "zitadel" "pocketid" "authentik" "keycloak" "adfs" }}
+{{- if not (has .Values.idp.type $allowed) }}
+{{- fail (printf "idp.type %q must be one of: %s" .Values.idp.type (join ", " $allowed)) }}
+{{- end }}
+{{- if and (not (has .Values.idp.type (list "google" "microsoft"))) (not .Values.idp.issuer) }}
+{{- fail (printf "idp.issuer is required for provider type %q" .Values.idp.type) }}
+{{- end }}
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: {{ include "netbird.fullname" . }}-idp
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+spec:
+  refreshInterval: {{ .Values.secrets.refreshInterval }}
+  secretStoreRef:
+    name: {{ .Values.secrets.clusterSecretStoreName }}
+    kind: ClusterSecretStore
+  target:
+    name: {{ include "netbird.fullname" . }}-idp
+    creationPolicy: Owner
+  data:
+    - secretKey: client-secret
+      remoteRef:
+        key: {{ .Values.secrets.awsSecretName }}
+        property: idp-client-secret
+    - secretKey: admin-token
+      remoteRef:
+        key: {{ .Values.secrets.awsSecretName }}
+        property: idp-admin-token
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "netbird.fullname" . }}-idp-sync
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+data:
+  sync.py: |
+    import json
+    import os
+    import time
+    import urllib.error
+    import urllib.request
+
+    base = os.environ["API_BASE"].rstrip("/")
+    token = os.environ["IDP_ADMIN_TOKEN"]
+    body = {
+        "type": os.environ["IDP_TYPE"],
+        "name": os.environ["IDP_NAME"],
+        "client_id": os.environ["IDP_CLIENT_ID"],
+        "client_secret": os.environ["IDP_CLIENT_SECRET"],
+    }
+    issuer = os.environ.get("IDP_ISSUER", "").strip()
+    if issuer:
+        body["issuer"] = issuer
+
+    def call(method, url, payload=None):
+        data = None if payload is None else json.dumps(payload).encode()
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Authorization", "Token " + token)
+        req.add_header("Accept", "application/json")
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read()
+                return resp.status, json.loads(raw) if raw else None
+        except urllib.error.HTTPError as err:
+            detail = err.read().decode(errors="replace")[:300]
+            return err.code, detail
+
+    listed = None
+    for attempt in range(1, 31):
+        status, listed = call("GET", base)
+        if status == 200 and isinstance(listed, list):
+            break
+        print(f"waiting for identity provider API ({status})", flush=True)
+        time.sleep(5)
+    else:
+        raise SystemExit("identity provider API did not become ready")
+
+    current = next((item for item in listed if item.get("name") == body["name"]), None)
+    if current:
+        status, result = call("PUT", f"{base}/{current['id']}", body)
+        action = "updated"
+    else:
+        status, result = call("POST", base, body)
+        action = "created"
+
+    if status not in (200, 201) or not isinstance(result, dict):
+        print(f"{action} failed: {status}", flush=True)
+        raise SystemExit(1)
+
+    callback = os.environ["PUBLIC_URL"].rstrip("/") + "/oauth2/callback/" + result["id"]
+    print(f"{action} {result['id']}", flush=True)
+    print(f"redirect {callback}", flush=True)
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "netbird.fullname" . }}-idp-sync-{{ .Release.Revision }}
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-weight: "5"
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        {{- include "netbird.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: idp-sync
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sync
+          image: python:3.12-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["python", "/script/sync.py"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: HOME
+              value: /tmp
+            - name: API_BASE
+              value: "http://{{ include "netbird.fullname" . }}-server.{{ .Release.Namespace }}.svc.cluster.local/api/identity-providers"
+            - name: PUBLIC_URL
+              value: "{{ .Values.global.protocol }}://{{ .Values.global.domain }}"
+            - name: IDP_TYPE
+              value: {{ .Values.idp.type | quote }}
+            - name: IDP_NAME
+              value: {{ .Values.idp.name | quote }}
+            - name: IDP_CLIENT_ID
+              value: {{ .Values.idp.clientId | quote }}
+            - name: IDP_ISSUER
+              value: {{ .Values.idp.issuer | quote }}
+            - name: IDP_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "netbird.fullname" . }}-idp
+                  key: client-secret
+            - name: IDP_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "netbird.fullname" . }}-idp
+                  key: admin-token
+          volumeMounts:
+            - name: script
+              mountPath: /script
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: script
+          configMap:
+            name: {{ include "netbird.fullname" . }}-idp-sync
+{{- end }}

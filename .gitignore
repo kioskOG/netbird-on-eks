@@ -1,0 +1,34 @@
+# Terraform / Terragrunt working files (keep .terraform.lock.hcl committed)
+.terraform/
+.terragrunt-cache/
+.terraform.d/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfplan
+
+# OS / editor noise
+.DS_Store
+.idea/
+.vscode/
+
+# Private keys, certificates and local secrets - never commit
+*.key
+*.pem
+*.crt
+*.cert
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+
+# Local AI/working notes
+prompt.md
+
+# Reusable modules are consumed by the live units, which own the lock files
+netbird-terraform/modules/**/.terraform.lock.hcl
+
+# Real environment values layered over the committed REPLACE_ME_* templates
+*.local.yaml
+.envrc.local

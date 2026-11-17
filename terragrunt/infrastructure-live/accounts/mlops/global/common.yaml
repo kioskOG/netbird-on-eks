@@ -1,0 +1,10 @@
+stage: "dev"
+env_name: "dev"
+aws_account_id: "REPLACE_ME_AWS_ACCOUNT_ID"
+aws_account_name: "netbird"
+account_name: "netbird"
+aws_region: "REPLACE_ME_AWS_REGION"
+namespace: "dev"
+tags:
+  Org : "SystemEngg"
+  Pod : "DevOps"

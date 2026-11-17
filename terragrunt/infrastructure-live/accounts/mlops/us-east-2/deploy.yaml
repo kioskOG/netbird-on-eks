@@ -1,0 +1,14 @@
+# Deployment settings for this region, read by the eks and keycloak/* units.
+# Kept separate from common.yaml because global/iam/role passes common.yaml wholesale to the
+# IAM module (policy_vars), and these values (credentials) must not travel there.
+# Real values go in the gitignored deploy.local.yaml.
+
+# Base DNS domain: keycloak.<domain>, grafana.<domain>, wazuh.<domain>.
+domain: "REPLACE_ME_DOMAIN"
+# IAM role names granted cluster access in the eks unit.
+sso_admin_role_name: "REPLACE_ME_SSO_ADMIN_ROLE_NAME"
+cicd_role_name: "REPLACE_ME_CICD_ROLE_NAME"
+# Keycloak credentials for the keycloak/* units.
+keycloak_admin_password: "REPLACE_ME_KEYCLOAK_ADMIN_PASSWORD"
+keycloak_initial_user_password: "REPLACE_ME_INITIAL_PASSWORD"
+wazuh_admin_email: "REPLACE_ME_EMAIL"

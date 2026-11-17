@@ -1,0 +1,19 @@
+aws-load-balancer-controller:
+  vpcId: 'REPLACE_ME_VPC_ID'
+  region: REPLACE_ME_AWS_REGION
+  clusterName: 'netbird'
+  serviceAccount:
+    create: true
+    name: aws-load-balancer-controller
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::REPLACE_ME_AWS_ACCOUNT_ID:role/AWSLoadBalancerControllerRole
+  image:
+    repository: public.ecr.aws/eks/aws-load-balancer-controller
+  # Gateway API controllers turn on when their CRDs exist. The Gateway API CRDs
+  # come from crds/ in this chart; the gateway.k8s.aws CRDs from the subchart.
+  controllerConfig:
+    featureGates:
+      ALBGatewayAPI: true
+
+
+# helm get values aws-load-balancer-controller -n kube-system

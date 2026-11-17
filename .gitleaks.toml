@@ -1,0 +1,9 @@
+# gitleaks configuration: default rules plus a narrow allowlist.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documentation examples that use obvious placeholder credentials"
+paths = [
+  '''terragrunt/infrastructure-modules/keycloak-client/examples/''',
+]

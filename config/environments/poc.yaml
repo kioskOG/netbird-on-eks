@@ -1,0 +1,19 @@
+# Initial deployment environment configuration
+# "POC" indicates scale, not disposable architecture.
+
+environment: "poc"
+region: "us-east-2"
+
+# DNS Configuration
+domain: "netbird.example.com" # TODO: replace with actual domain
+
+# Database Sizing
+postgresql:
+  replicas: 1
+  storage_size: "20Gi"
+  storage_class: "gp3"
+
+# NetBird Sizing
+netbird:
+  server_replicas: 1
+  dashboard_replicas: 1

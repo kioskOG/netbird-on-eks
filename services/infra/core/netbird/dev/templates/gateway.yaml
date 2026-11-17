@@ -1,0 +1,212 @@
+{{- if .Values.gateway.enabled -}}
+{{- /*
+Gateway API alternative to ingress.yaml. Same ALB layout: one HTTPS listener,
+HTTP/1 target group for the REST/relay paths, HTTP/2 target group for gRPC,
+dashboard as the catch-all. Needs AWS Load Balancer Controller v2.14+ and the
+Gateway API standard CRDs plus the controller's gateway CRDs.
+*/ -}}
+{{- $fullname := include "netbird.fullname" . -}}
+{{- if .Values.gateway.gatewayClass.create }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .Values.gateway.gatewayClass.name }}
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+spec:
+  controllerName: gateway.k8s.aws/alb
+{{- end }}
+---
+apiVersion: {{ .Values.gateway.awsApiVersion }}
+kind: LoadBalancerConfiguration
+metadata:
+  name: {{ $fullname }}-alb
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+spec:
+  scheme: {{ .Values.gateway.scheme }}
+  {{- with .Values.gateway.loadBalancerName }}
+  loadBalancerName: {{ . }}
+  {{- end }}
+  listenerConfigurations:
+    - protocolPort: "HTTPS:443"
+      {{- with .Values.gateway.certificateArn }}
+      defaultCertificate: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.gateway.sslPolicy }}
+      sslPolicy: {{ . }}
+      {{- end }}
+  {{- with .Values.gateway.tags }}
+  tags:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+spec:
+  gatewayClassName: {{ .Values.gateway.gatewayClass.name }}
+  infrastructure:
+    parametersRef:
+      group: gateway.k8s.aws
+      kind: LoadBalancerConfiguration
+      name: {{ $fullname }}-alb
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      hostname: {{ .Values.global.domain | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: {{ .Values.global.domain | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+# Same as alb.ingress.kubernetes.io/ssl-redirect: '443'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fullname }}-redirect
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ $fullname }}
+      sectionName: http
+  hostnames:
+    - {{ .Values.global.domain | quote }}
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            port: 443
+            statusCode: 301
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fullname }}-http
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ $fullname }}
+      sectionName: https
+  hostnames:
+    - {{ .Values.global.domain | quote }}
+  rules:
+    - matches:
+        {{- range list "/relay" "/ws-proxy" "/api" "/oauth2" }}
+        - path:
+            type: PathPrefix
+            value: {{ . }}
+        {{- end }}
+      backendRefs:
+        - name: {{ $fullname }}-server
+          port: 80
+---
+# A separate route so the server Service gets a second, HTTP/2 target group
+# (see routeConfigurations in the TargetGroupConfiguration below).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fullname }}-grpc
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ $fullname }}
+      sectionName: https
+  hostnames:
+    - {{ .Values.global.domain | quote }}
+  rules:
+    - matches:
+        {{- range list "/signalexchange.SignalExchange" "/management.ManagementService" "/management.ProxyService" }}
+        - path:
+            type: PathPrefix
+            value: {{ . }}
+        {{- end }}
+      backendRefs:
+        - name: {{ $fullname }}-server
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fullname }}-dashboard
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ $fullname }}
+      sectionName: https
+  hostnames:
+    - {{ .Values.global.domain | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ $fullname }}-dashboard
+          port: 80
+---
+apiVersion: {{ .Values.gateway.awsApiVersion }}
+kind: TargetGroupConfiguration
+metadata:
+  name: {{ $fullname }}-server
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+spec:
+  targetReference:
+    name: {{ $fullname }}-server
+  defaultConfiguration:
+    targetType: ip
+    protocolVersion: HTTP1
+    healthCheckConfig:
+      healthCheckProtocol: HTTP
+      healthCheckPort: {{ .Values.server.metricsPort | quote }}
+      healthCheckPath: /metrics
+      matcher:
+        httpCode: "200"
+  routeConfigurations:
+    - routeIdentifier:
+        kind: HTTPRoute
+        namespace: {{ .Release.Namespace }}
+        name: {{ $fullname }}-grpc
+      targetGroupProps:
+        # HTTP2, not GRPC, same as the Ingress. Port 80 speaks HTTP/2; the
+        # metrics port is HTTP/1 only, so health-check the server port.
+        protocolVersion: HTTP2
+        healthCheckConfig:
+          healthCheckProtocol: HTTP
+          healthCheckPort: {{ .Values.server.port | quote }}
+          healthCheckPath: /oauth2/.well-known/openid-configuration
+          matcher:
+            httpCode: "200"
+---
+apiVersion: {{ .Values.gateway.awsApiVersion }}
+kind: TargetGroupConfiguration
+metadata:
+  name: {{ $fullname }}-dashboard
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+spec:
+  targetReference:
+    name: {{ $fullname }}-dashboard
+  defaultConfiguration:
+    targetType: ip
+    healthCheckConfig:
+      healthCheckProtocol: HTTP
+      healthCheckPath: /
+{{- end }}

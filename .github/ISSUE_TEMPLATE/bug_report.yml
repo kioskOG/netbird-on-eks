@@ -1,0 +1,46 @@
+name: Bug report
+description: Something in the modules, Terragrunt units or Helm charts does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste tokens, setup keys, state files or private keys.** Redact them first.
+        Report security vulnerabilities privately (see SECURITY.md), not here.
+  - type: input
+    id: component
+    attributes:
+      label: Component
+      description: Module, Terragrunt unit or chart, e.g. `netbird-terraform/modules/policy`
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal inputs / commands
+      render: hcl
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      value: |
+        Terraform:
+        Terragrunt:
+        NetBird provider:
+        NetBird management server:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output (redacted)
+      render: shell

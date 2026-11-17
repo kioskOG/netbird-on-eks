@@ -1,0 +1,20 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: netbird-postgresql
+  namespace: netbird
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+  storage:
+    size: 20Gi
+    storageClass: gp2
+  bootstrap:
+    initdb:
+      database: netbird
+      owner: netbird
+      secret:
+        name: netbird-pg-app

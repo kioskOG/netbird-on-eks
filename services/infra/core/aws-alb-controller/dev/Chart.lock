@@ -1,0 +1,6 @@
+dependencies:
+- name: aws-load-balancer-controller
+  repository: https://aws.github.io/eks-charts
+  version: 3.6.0
+digest: sha256:ed0e30afe395f7f044923720cb4c665860c026ec329fd1ff178e3c3f01e0adf6
+generated: "2026-10-09T10:52:46.094076+05:30"

@@ -1,0 +1,7 @@
+{{- if .Values.networkPolicy.enabled }}
+# NetworkPolicy intentionally left empty but configurable.
+# NetBird requires inbound traffic from the ALB Ingress, STUN UDP traffic from the world,
+# outbound traffic to PostgreSQL, outbound traffic to the OIDC provider, and outbound DNS.
+# Since EKS environments vary heavily by CNI, ingress namespace, and OIDC endpoints,
+# users should provide custom policy rules via Values if network policies are enabled.
+{{- end }}

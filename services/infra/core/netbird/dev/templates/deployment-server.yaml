@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "netbird.fullname" . }}-server
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: {{ .Values.server.replicaCount }}
+  {{- if .Values.persistence.enabled }}
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "netbird.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        {{- include "netbird.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+    spec:
+      serviceAccountName: {{ include "netbird.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.server.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: config-templater
+          image: alpine:3.18
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              apk add --no-cache gettext
+              envsubst '${PG_HOST} ${PG_PORT} ${PG_USER} ${PG_PASSWORD} ${PG_DB_NAME} ${NETBIRD_AUTH_SECRET} ${NETBIRD_DATASTORE_ENCRYPTION_KEY} ${NETBIRD_SESSION_COOKIE_ENCRYPTION_KEY}' \
+                < /config-template/config.yaml.tmpl > /etc/netbird/config.yaml
+          volumeMounts:
+            - name: config-template
+              mountPath: /config-template
+            - name: config
+              mountPath: /etc/netbird
+          env:
+            - name: PG_HOST
+              value: "netbird-postgresql-rw.{{ .Release.Namespace }}.svc.cluster.local"
+            - name: PG_PORT
+              value: "5432"
+            - name: PG_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.secretName }}
+                  key: username
+            - name: PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.secretName }}
+                  key: password
+            - name: PG_DB_NAME
+              value: {{ .Values.database.name | quote }}
+          envFrom:
+            - secretRef:
+                name: {{ include "netbird.fullname" . }}-keys
+      containers:
+        - name: server
+          securityContext:
+            {{- toYaml .Values.server.securityContext | nindent 12 }}
+          image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          args:
+            - "--config"
+            - "/etc/netbird/config.yaml"
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.port }}
+              protocol: TCP
+            - name: stun
+              containerPort: {{ .Values.server.stunPort }}
+              protocol: UDP
+            - name: metrics
+              containerPort: {{ .Values.server.metricsPort }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ .Values.server.healthPort }}
+              protocol: TCP
+          # /health on :9000 also dials the public relay URL and returns 503
+          # until that URL can reach this pod. Probing it restarts a working server.
+          startupProbe:
+            tcpSocket:
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/netbird
+            - name: config
+              mountPath: /etc/netbird
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "netbird.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: config-template
+          configMap:
+            name: {{ include "netbird.fullname" . }}-config
+        - name: config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

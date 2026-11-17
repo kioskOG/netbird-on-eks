@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "netbird.fullname" . }}-stun
+  labels:
+    {{- include "netbird.labels" . | nindent 4 }}
+    app.kubernetes.io/component: stun
+  annotations:
+    # Use AWS NLB for UDP traffic
+    service.beta.kubernetes.io/aws-load-balancer-type: "external"
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: HTTP
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "{{ .Values.server.healthPort }}"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: /health
+    {{- if .Values.server.stunSubnets }}
+    service.beta.kubernetes.io/aws-load-balancer-subnets: {{ .Values.server.stunSubnets | quote }}
+    {{- end }}
+    {{- if .Values.server.stunAnnotations }}
+    {{- toYaml .Values.server.stunAnnotations | nindent 4 }}
+    {{- end }}
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  ports:
+    - port: {{ .Values.server.stunPort }}
+      targetPort: stun
+      protocol: UDP
+      name: stun
+  selector:
+    {{- include "netbird.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server

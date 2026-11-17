@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TERRAFORM_VERSION: "1.16.5"
+  TERRAGRUNT_VERSION: "1.1.6"
+
+jobs:
+  secrets-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  placeholders:
+    name: PLACEHOLDERS.md up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/placeholders.py docs --check
+
+  terraform:
+    name: Terraform fmt / validate / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff netbird-terraform terragrunt/infrastructure-modules
+
+      - name: Validate and test NetBird modules (offline, mocked provider)
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/tf-plugin-cache
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          status=0
+          for dir in netbird-terraform/modules/*/; do
+            echo "::group::${dir}"
+            (
+              cd "$dir"
+              terraform init -backend=false -input=false -no-color >/dev/null
+              terraform validate -no-color
+              if [ -d tests ]; then terraform test -no-color; fi
+            ) || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+  terragrunt:
+    name: Terragrunt HCL format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Terragrunt
+        run: |
+          curl -fsSL -o /usr/local/bin/terragrunt \
+            "https://github.com/gruntwork-io/terragrunt/releases/download/v${TERRAGRUNT_VERSION}/terragrunt_linux_amd64"
+          chmod +x /usr/local/bin/terragrunt
+          terragrunt --version
+      - name: terragrunt hcl format --check
+        run: terragrunt hcl format --check --working-dir terragrunt
+
+  helm:
+    name: Helm lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: helm lint
+        run: |
+          status=0
+          for chart in $(find services -name Chart.yaml -exec dirname {} \;); do
+            echo "::group::${chart}"
+            helm lint "$chart" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        # userdata.sh and notification.sh are rendered into EKS launch templates; editing them
+        # would roll the node group, so they are excluded rather than "fixed".
+        run: |
+          find . -name '*.sh' -not -path './.git/*' \
+            -not -path '*/eks/userdata.sh' -not -path '*/eks/notification.sh' -print0 \
+            | xargs -0 -r shellcheck --severity=warning
